@@ -35,7 +35,10 @@ fastify.get('/health', async () => ({
 }))
 
 // Boot
-await fastify.listen({ port: process.env.PORT, host: '0.0.0.0' })
+await fastify.listen({ 
+  port: process.env.PORT || 3000, 
+  host: '0.0.0.0' 
+})
 
 // Attach WebSocket to the same HTTP server Fastify created
 createWebSocketServer(fastify.server)
@@ -43,7 +46,7 @@ createWebSocketServer(fastify.server)
 // Bridge queue events → WebSocket clients
 createQueueEventBroadcaster()
 
-console.log(`[server] HTTP + WebSocket running on port ${process.env.PORT}`)
+console.log(`[server] HTTP + WebSocket running on port ${process.env.PORT || 3000}`)
 
 // Graceful Shutdown
 const shutdown = async () => {
