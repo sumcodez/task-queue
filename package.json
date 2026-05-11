@@ -13,7 +13,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
-    "worker": "nodemon src/worker/index.js"
+    "worker": "node src/worker/index.js"
   },
   "type": "module"
 }
