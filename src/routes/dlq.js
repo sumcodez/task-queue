@@ -6,8 +6,7 @@ export async function dlqRoutes(fastify) {
   fastify.get('/dlq', async (request, reply) => {
     let { limit = 50, offset = 0 } = request.query
 
-    // Validate and sanitize query params
-    limit  = parseInt(limit)
+    limit = parseInt(limit)
     offset = parseInt(offset)
 
     if (isNaN(limit) || limit < 1 || limit > 200) {
@@ -23,29 +22,41 @@ export async function dlqRoutes(fastify) {
     }
 
     try {
-      const failedJobs = await taskQueue.getFailed(offset, offset + limit - 1)
+
+      // BullMQ way to fetch failed jobs
+      const failedJobs = await taskQueue.getJobs(
+        ['failed'],
+        offset,
+        offset + limit - 1,
+        false
+      )
 
       return {
-        count:  failedJobs.length,
+        count: failedJobs.length,
         limit,
         offset,
         jobs: failedJobs.map(job => ({
-          jobId:      job.id,
-          type:       job.name,
-          payload:    job.data,
+          jobId: job.id,
+          type: job.name,
+          payload: job.data,
           failReason: job.failedReason,
           stacktrace: job.stacktrace?.[0] || null,
-          attempts:   job.attemptsMade,
-          createdAt:  new Date(job.timestamp).toISOString(),
-          failedAt:   job.finishedOn
-                        ? new Date(job.finishedOn).toISOString()
-                        : null
+          attempts: job.attemptsMade,
+          createdAt: new Date(job.timestamp).toISOString(),
+          failedAt: job.finishedOn
+            ? new Date(job.finishedOn).toISOString()
+            : null
         }))
       }
+
     } catch (err) {
+
+      console.error(err)
+
       fastify.log.error(err, 'Failed to fetch DLQ jobs')
+
       return reply.code(500).send({
-        error:   'Failed to fetch failed jobs',
+        error: 'Failed to fetch failed jobs',
         details: err.message
       })
     }
@@ -54,9 +65,11 @@ export async function dlqRoutes(fastify) {
 
   // POST /dlq/:id/retry
   fastify.post('/dlq/:id/retry', async (request, reply) => {
+
     const { id } = request.params
 
     try {
+
       const job = await taskQueue.getJob(id)
 
       if (!job) {
@@ -69,26 +82,29 @@ export async function dlqRoutes(fastify) {
 
       if (state !== 'failed') {
         return reply.code(400).send({
-          error:        `Only failed jobs can be retried`,
+          error: 'Only failed jobs can be retried',
           currentState: state,
-          jobId:        id
+          jobId: id
         })
       }
 
       await job.retry()
 
       return {
-        jobId:   job.id,
-        type:    job.name,
-        status:  'requeued',
+        jobId: job.id,
+        type: job.name,
+        status: 'requeued',
         message: 'Job moved back to queue'
       }
 
     } catch (err) {
-      // 404 and 400 already handled above — this catches Redis errors
+
+      console.error(err)
+
       fastify.log.error(err, `Failed to retry job ${id}`)
+
       return reply.code(500).send({
-        error:   `Failed to retry job ${id}`,
+        error: `Failed to retry job ${id}`,
         details: err.message
       })
     }
@@ -97,11 +113,17 @@ export async function dlqRoutes(fastify) {
 
   // POST /dlq/retry-all
   fastify.post('/dlq/retry-all', async (request, reply) => {
+
     try {
-      const failedJobs = await taskQueue.getFailed(0, -1)
+
+      // BullMQ way
+      const failedJobs = await taskQueue.getJobs(['failed'])
 
       if (failedJobs.length === 0) {
-        return { retried: 0, message: 'DLQ is empty' }
+        return {
+          retried: 0,
+          message: 'DLQ is empty'
+        }
       }
 
       const results = await Promise.allSettled(
@@ -109,9 +131,8 @@ export async function dlqRoutes(fastify) {
       )
 
       const succeeded = results.filter(r => r.status === 'fulfilled')
-      const errored   = results.filter(r => r.status === 'rejected')
+      const errored = results.filter(r => r.status === 'rejected')
 
-      // Log individual failures so you can debug them
       errored.forEach((r, i) => {
         fastify.log.error(
           `Failed to retry job ${failedJobs[i].id}: ${r.reason?.message}`
@@ -119,32 +140,37 @@ export async function dlqRoutes(fastify) {
       })
 
       return {
-        retried:  succeeded.length,
-        errored:  errored.length,
-        total:    failedJobs.length,
-        message:  `${succeeded.length} jobs moved back to queue`,
-        // tell the caller which jobs couldn't be retried
+        retried: succeeded.length,
+        errored: errored.length,
+        total: failedJobs.length,
+        message: `${succeeded.length} jobs moved back to queue`,
         errors: errored.map((r, i) => ({
-          jobId:  failedJobs[i].id,
+          jobId: failedJobs[i].id,
           reason: r.reason?.message
         }))
       }
 
     } catch (err) {
+
+      console.error(err)
+
       fastify.log.error(err, 'Failed to retry all DLQ jobs')
+
       return reply.code(500).send({
-        error:   'Failed to retry all jobs',
+        error: 'Failed to retry all jobs',
         details: err.message
       })
     }
   })
 
 
-  // DELETE /dlq/:id 
+  // DELETE /dlq/:id
   fastify.delete('/dlq/:id', async (request, reply) => {
+
     const { id } = request.params
 
     try {
+
       const job = await taskQueue.getJob(id)
 
       if (!job) {
@@ -157,24 +183,28 @@ export async function dlqRoutes(fastify) {
 
       if (state !== 'failed') {
         return reply.code(400).send({
-          error:        'Only failed jobs can be discarded from DLQ',
+          error: 'Only failed jobs can be discarded from DLQ',
           currentState: state,
-          jobId:        id
+          jobId: id
         })
       }
 
       await job.remove()
 
       return {
-        jobId:   id,
-        status:  'discarded',
+        jobId: id,
+        status: 'discarded',
         message: 'Job permanently removed from DLQ'
       }
 
     } catch (err) {
+
+      console.error(err)
+
       fastify.log.error(err, `Failed to discard job ${id}`)
+
       return reply.code(500).send({
-        error:   `Failed to discard job ${id}`,
+        error: `Failed to discard job ${id}`,
         details: err.message
       })
     }
@@ -183,11 +213,17 @@ export async function dlqRoutes(fastify) {
 
   // DELETE /dlq
   fastify.delete('/dlq', async (request, reply) => {
+
     try {
-      const failedJobs = await taskQueue.getFailed(0, -1)
+
+      // BullMQ way
+      const failedJobs = await taskQueue.getJobs(['failed'])
 
       if (failedJobs.length === 0) {
-        return { discarded: 0, message: 'DLQ is already empty' }
+        return {
+          discarded: 0,
+          message: 'DLQ is already empty'
+        }
       }
 
       const results = await Promise.allSettled(
@@ -195,7 +231,7 @@ export async function dlqRoutes(fastify) {
       )
 
       const succeeded = results.filter(r => r.status === 'fulfilled')
-      const errored   = results.filter(r => r.status === 'rejected')
+      const errored = results.filter(r => r.status === 'rejected')
 
       errored.forEach((r, i) => {
         fastify.log.error(
@@ -205,19 +241,23 @@ export async function dlqRoutes(fastify) {
 
       return {
         discarded: succeeded.length,
-        errored:   errored.length,
-        total:     failedJobs.length,
-        message:   `${succeeded.length} jobs permanently removed`,
+        errored: errored.length,
+        total: failedJobs.length,
+        message: `${succeeded.length} jobs permanently removed`,
         errors: errored.map((r, i) => ({
-          jobId:  failedJobs[i].id,
+          jobId: failedJobs[i].id,
           reason: r.reason?.message
         }))
       }
 
     } catch (err) {
+
+      console.error(err)
+
       fastify.log.error(err, 'Failed to clear DLQ')
+
       return reply.code(500).send({
-        error:   'Failed to clear DLQ',
+        error: 'Failed to clear DLQ',
         details: err.message
       })
     }
@@ -226,7 +266,9 @@ export async function dlqRoutes(fastify) {
 
   // GET /stats
   fastify.get('/stats', async (request, reply) => {
+
     try {
+
       const [
         waitingCount,
         prioritizedCount,
@@ -244,18 +286,27 @@ export async function dlqRoutes(fastify) {
       ])
 
       return {
-        queued:    waitingCount + prioritizedCount,
-        active:    activeCount,
+        queued: waitingCount + prioritizedCount,
+        active: activeCount,
         completed: completedCount,
-        failed:    failedCount,
-        delayed:   delayedCount,
-        total:     waitingCount + prioritizedCount + activeCount + completedCount + failedCount
+        failed: failedCount,
+        delayed: delayedCount,
+        total:
+          waitingCount +
+          prioritizedCount +
+          activeCount +
+          completedCount +
+          failedCount
       }
 
     } catch (err) {
+
+      console.error(err)
+
       fastify.log.error(err, 'Failed to fetch queue stats')
+
       return reply.code(500).send({
-        error:   'Failed to fetch stats',
+        error: 'Failed to fetch stats',
         details: err.message
       })
     }
