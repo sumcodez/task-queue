@@ -236,7 +236,7 @@ export async function dlqRoutes(fastify) {
         delayedCount
       ] = await Promise.all([
         taskQueue.getWaitingCount(),
-        taskQueue.getWaitingChildrenCount(),
+        taskQueue.getPrioritizedCount(),
         taskQueue.getActiveCount(),
         taskQueue.getCompletedCount(),
         taskQueue.getFailedCount(),
